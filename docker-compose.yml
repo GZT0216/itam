@@ -1,0 +1,155 @@
+x-backend-env: &backend-env
+  APP_ENV: production
+  SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required in .env}
+  ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
+  REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
+  TOKEN_STORE: redis
+  REDIS_URL: redis://redis:6379/0
+  DB_HOST: mysql
+  DB_PORT: 3306
+  DB_USER: ${DB_USER:-itam}
+  DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required in .env}
+  DB_NAME: ${DB_NAME:-itam}
+  DEFAULT_ADMIN_USERNAME: ${DEFAULT_ADMIN_USERNAME:-admin}
+  DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:?DEFAULT_ADMIN_PASSWORD is required in .env}
+  DEFAULT_ADMIN_NAME: ${DEFAULT_ADMIN_NAME:-系统管理员}
+  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost}
+  UPLOAD_DIR: /app/uploads
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  ASSET_NO_PREFIX: ${ASSET_NO_PREFIX:-ITAM}
+  SEED_SAMPLE_DATA: ${SEED_SAMPLE_DATA:-false}
+
+x-backend-service: &backend-service
+  image: itam-backend:local
+  restart: unless-stopped
+  environment: *backend-env
+  env_file:
+    - .env
+  volumes:
+    - uploads_data:/app/uploads
+    - app_logs:/app/logs
+  networks:
+    - itam-net
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${DB_NAME:-itam}
+      MYSQL_USER: ${DB_USER:-itam}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required in .env}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?DB_ROOT_PASSWORD is required in .env}
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+08:00
+      - --max-connections=300
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", 'mysqladmin ping -h 127.0.0.1 -u root -p"$$MYSQL_ROOT_PASSWORD" --silent']
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    networks:
+      - itam-net
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks:
+      - itam-net
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  backend:
+    <<: *backend-service
+    build:
+      context: ./backend
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
+
+  celery-worker:
+    <<: *backend-service
+    command: ["celery", "-A", "app.celery_app.celery", "worker", "--loglevel=INFO", "--concurrency=2"]
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  celery-beat:
+    <<: *backend-service
+    command:
+      - celery
+      - -A
+      - app.celery_app.celery
+      - beat
+      - --loglevel=INFO
+      - --schedule=/app/logs/celerybeat-schedule
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  frontend:
+    image: itam-frontend:local
+    build:
+      context: ./frontend
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - itam-net
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  mysql_data:
+  redis_data:
+  uploads_data:
+  app_logs:
+
+networks:
+  itam-net:
+    driver: bridge

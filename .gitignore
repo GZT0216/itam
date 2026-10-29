@@ -1,0 +1,38 @@
+# secrets
+.env
+.env.*
+!.env.example
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.db
+*.sqlite
+*.sqlite3
+*.dump
+*.bak
+test_uploads/
+*_uploads/
+uploads/
+
+# node
+node_modules/
+dist/
+.vite/
+npm-debug.log*
+yarn-error.log*
+
+# editors / os
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# logs
+*.log
+logs/
